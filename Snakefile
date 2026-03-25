@@ -1,26 +1,52 @@
 configfile: "config.yaml"
+import itertools
 
 # Extract cohorts from the nested config structure
 COHORTS = config["cohorts"]
 RANKS = [2, 3, 4, 5]
 
+# Generate all unique pairs of cohorts for validation
+# e.g., if cohorts are [A, B, C], pairs are [(A,B), (A,C), (B,C)]
+COHORT_PAIRS = list(itertools.combinations(COHORTS, 2))
+
 rule all:
     input:
-        # Fused networks for every cohort
+        # 1. New Gatekeeper: Validation reports for every pair
+        expand("results/validation/{c1}_vs_{c2}_bridge.txt", 
+               zip, 
+               c1=[p[0] for p in COHORT_PAIRS], 
+               c2=[p[1] for p in COHORT_PAIRS]),
+        # 2. Fused networks for every cohort
         expand("results/{cohort}/fused_network.npy", cohort=COHORTS),
-        # NMF results for every cohort and every rank
+        # 3. NMF results for every cohort and every rank
         expand("results/{cohort}/nmf_results_k{k}.csv", cohort=COHORTS, k=RANKS),
-        # Final meta-summary and projections
+        # 4. Final meta-summary and projections
         "results/meta_best_rank_summary.txt",
         expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS),
         "results/meta_conserved_drivers.csv",
         "results/meta_similarity_heatmap.png",
         "results/FINAL_META_REPORT.md"
 
+# --- [NEW] Rule: Validates biological identity for every pair ---
+rule check_biological_bridge:
+    input:
+        a = lambda wildcards: config["data"][wildcards.c1]["mrna"],
+        b = lambda wildcards: config["data"][wildcards.c2]["mrna"]
+    output:
+        report = "results/validation/{c1}_vs_{c2}_bridge.txt"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/check_alignment.py {input.a} {input.b} > {output.report}"
+
 rule run_snf:
     input:
-        # Uses a lambda to fetch the specific omics files for each cohort
-        lambda wildcards: config["data"][wildcards.cohort].values()
+        # This forces the pipeline to validate EVERY bridge before starting math
+        bridges = expand("results/validation/{c1}_vs_{c2}_bridge.txt", 
+                         zip, 
+                         c1=[p[0] for p in COHORT_PAIRS], 
+                         c2=[p[1] for p in COHORT_PAIRS]),
+        layers = lambda wildcards: config["data"][wildcards.cohort].values()
     output:
         fused = "results/{cohort}/fused_network.npy"
     log:
@@ -29,7 +55,7 @@ rule run_snf:
         "envs/environment.yaml"
     shell:
         "python scripts/snf_fusion.py "
-        "--inputs {input} "
+        "--inputs {input.layers} "
         "--output {output.fused} > {log} 2>&1"
 
 rule run_nmf:
@@ -45,7 +71,6 @@ rule run_nmf:
         "--rank {wildcards.k} "
         "--output {output.csv}"
 
-# Meta-Rule: Finds the K that maximizes average CCC across ALL cohorts
 rule select_meta_best_k:
     input:
         expand("results/{cohort}/nmf_results_k{k}.csv", cohort=COHORTS, k=RANKS)
@@ -53,13 +78,11 @@ rule select_meta_best_k:
         summary = "results/meta_best_rank_summary.txt"
     run:
         import pandas as pd
-        
         all_data = []
         for f in input:
             df = pd.read_csv(f)
             all_data.append(df[['rank', 'cophenetic_coeff']])
         
-        # Calculate mean CCC across cohorts for each rank
         res_df = pd.concat(all_data)
         mean_ccc = res_df.groupby('rank')['cophenetic_coeff'].mean()
         best_k = mean_ccc.idxmax()
@@ -72,10 +95,9 @@ rule project_features:
     input:
         summary = "results/meta_best_rank_summary.txt",
         fused = "results/{cohort}/fused_network.npy",
-        # Access the specific cohort's data for back-projection
         mrna = lambda wildcards: config["data"][wildcards.cohort]["mrna"],
-        methy = lambda wildcards: config["data"][wildcards.cohort]["methy"],
-        mirna = lambda wildcards: config["data"][wildcards.cohort]["mirna"]
+        methy = lambda wildcards: config["data"][wildcards.cohort].get("methy", ""),
+        mirna = lambda wildcards: config["data"][wildcards.cohort].get("mirna", "")
     output:
         top_features = "results/{cohort}/top_features_best_k.csv"
     log:
@@ -88,8 +110,6 @@ rule project_features:
         "--fused {input.fused} "
         "--omics {input.mrna} {input.methy} {input.mirna} "
         "--output {output.top_features} > {log} 2>&1"
-
-# Add "results/meta_conserved_drivers.csv" to your rule all: input list
 
 rule compare_meta_cohorts:
     input:
@@ -114,8 +134,6 @@ rule plot_meta_similarity:
         "python scripts/plot_meta_correlation.py "
         "--inputs {input} "
         "--output {output.png}"
-
-# Add "results/FINAL_META_REPORT.md" to your rule all: input list
 
 rule generate_meta_report:
     input:

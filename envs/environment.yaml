@@ -12,5 +12,6 @@ dependencies:
   - matplotlib  # Added for the visualization step we discussed
   - seaborn     # Added for high-quality cluster heatmaps
   - pip
+  - mygene
   - pip:
     - snfpy==0.2.2
