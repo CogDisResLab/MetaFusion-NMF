@@ -1,0 +1,132 @@
+configfile: "config.yaml"
+
+# Extract cohorts from the nested config structure
+COHORTS = config["cohorts"]
+RANKS = [2, 3, 4, 5]
+
+rule all:
+    input:
+        # Fused networks for every cohort
+        expand("results/{cohort}/fused_network.npy", cohort=COHORTS),
+        # NMF results for every cohort and every rank
+        expand("results/{cohort}/nmf_results_k{k}.csv", cohort=COHORTS, k=RANKS),
+        # Final meta-summary and projections
+        "results/meta_best_rank_summary.txt",
+        expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS),
+        "results/meta_conserved_drivers.csv",
+        "results/meta_similarity_heatmap.png",
+        "results/FINAL_META_REPORT.md"
+
+rule run_snf:
+    input:
+        # Uses a lambda to fetch the specific omics files for each cohort
+        lambda wildcards: config["data"][wildcards.cohort].values()
+    output:
+        fused = "results/{cohort}/fused_network.npy"
+    log:
+        "logs/{cohort}/snf_fusion.log"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/snf_fusion.py "
+        "--inputs {input} "
+        "--output {output.fused} > {log} 2>&1"
+
+rule run_nmf:
+    input:
+        fused = "results/{cohort}/fused_network.npy"
+    output:
+        csv = "results/{cohort}/nmf_results_k{k}.csv"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/nmf_decompose.py "
+        "--input {input.fused} "
+        "--rank {wildcards.k} "
+        "--output {output.csv}"
+
+# Meta-Rule: Finds the K that maximizes average CCC across ALL cohorts
+rule select_meta_best_k:
+    input:
+        expand("results/{cohort}/nmf_results_k{k}.csv", cohort=COHORTS, k=RANKS)
+    output:
+        summary = "results/meta_best_rank_summary.txt"
+    run:
+        import pandas as pd
+        
+        all_data = []
+        for f in input:
+            df = pd.read_csv(f)
+            all_data.append(df[['rank', 'cophenetic_coeff']])
+        
+        # Calculate mean CCC across cohorts for each rank
+        res_df = pd.concat(all_data)
+        mean_ccc = res_df.groupby('rank')['cophenetic_coeff'].mean()
+        best_k = mean_ccc.idxmax()
+        
+        with open(output.summary, "w") as f:
+            f.write(f"Meta-Best Rank (k): {int(best_k)}\n")
+            f.write(f"Average Cophenetic Correlation: {mean_ccc[best_k]:.4f}\n")
+
+rule project_features:
+    input:
+        summary = "results/meta_best_rank_summary.txt",
+        fused = "results/{cohort}/fused_network.npy",
+        # Access the specific cohort's data for back-projection
+        mrna = lambda wildcards: config["data"][wildcards.cohort]["mrna"],
+        methy = lambda wildcards: config["data"][wildcards.cohort]["methy"],
+        mirna = lambda wildcards: config["data"][wildcards.cohort]["mirna"]
+    output:
+        top_features = "results/{cohort}/top_features_best_k.csv"
+    log:
+        "logs/{cohort}/project_features.log"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/project_features.py "
+        "--summary {input.summary} "
+        "--fused {input.fused} "
+        "--omics {input.mrna} {input.methy} {input.mirna} "
+        "--output {output.top_features} > {log} 2>&1"
+
+# Add "results/meta_conserved_drivers.csv" to your rule all: input list
+
+rule compare_meta_cohorts:
+    input:
+        expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS)
+    output:
+        csv = "results/meta_conserved_drivers.csv"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/compare_meta_cohorts.py "
+        "--inputs {input} "
+        "--output {output.csv}"
+
+rule plot_meta_similarity:
+    input:
+        expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS)
+    output:
+        png = "results/meta_similarity_heatmap.png"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/plot_meta_correlation.py "
+        "--inputs {input} "
+        "--output {output.png}"
+
+# Add "results/FINAL_META_REPORT.md" to your rule all: input list
+
+rule generate_meta_report:
+    input:
+        summary = "results/meta_best_rank_summary.txt",
+        drivers = "results/meta_conserved_drivers.csv"
+    output:
+        report = "results/FINAL_META_REPORT.md"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/generate_meta_report.py "
+        "--summary {input.summary} "
+        "--drivers {input.drivers} "
+        "--output {output.report}"

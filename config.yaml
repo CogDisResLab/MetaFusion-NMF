@@ -1,0 +1,24 @@
+# Define the cohorts you want to integrate horizontally
+cohorts:
+  - "Cohort_A"
+  - "Cohort_B"
+
+# Map the vertical omics layers for each cohort
+# Note: The keys (mrna, methy, mirna) should be consistent across cohorts 
+# to allow for feature-wise meta-analysis later.
+data:
+  Cohort_A:
+    mrna: "data/cohort_a/expression.csv"
+    methy: "data/cohort_a/methylation.csv"
+    mirna: "data/cohort_a/mirna.csv"
+  
+  Cohort_B:
+    mrna: "data/cohort_b/expression.csv"
+    methy: "data/cohort_b/methylation.csv"
+    mirna: "data/cohort_b/mirna.csv"
+
+# Global settings for the SNF/NMF pipeline
+params:
+  K: 20
+  t: 20
+  ranks: [2, 3, 4, 5]
