@@ -1,4 +1,4 @@
-# Meta-SNF-NMF: Cross-Cohort Multi-Omics Integration
+# MetaFusion-NMF: Cross-Cohort Multi-Omics Integration
 
 This pipeline performs **Vertical Integration** (fusing mRNA, Methylation, and miRNA within a cohort) and **Horizontal Integration** (identifying conserved biological subtypes across different cohorts, such as Humans vs. iPSCs).
 
