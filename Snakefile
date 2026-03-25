@@ -1,21 +1,13 @@
 configfile: "config.yaml"
-import itertools
 
 # Extract cohorts from the nested config structure
 COHORTS = config["cohorts"]
 RANKS = [2, 3, 4, 5]
 
-# Generate all unique pairs of cohorts for validation
-# e.g., if cohorts are [A, B, C], pairs are [(A,B), (A,C), (B,C)]
-COHORT_PAIRS = list(itertools.combinations(COHORTS, 2))
-
 rule all:
     input:
-        # 1. New Gatekeeper: Validation reports for every pair
-        expand("results/validation/{c1}_vs_{c2}_bridge.txt", 
-               zip, 
-               c1=[p[0] for p in COHORT_PAIRS], 
-               c2=[p[1] for p in COHORT_PAIRS]),
+        # 1. Global Gatekeeper: Validation report for all cohorts
+        "results/validation/global_bridge_report.txt",
         # 2. Fused networks for every cohort
         expand("results/{cohort}/fused_network.npy", cohort=COHORTS),
         # 3. NMF results for every cohort and every rank
@@ -27,26 +19,29 @@ rule all:
         "results/meta_similarity_heatmap.png",
         "results/FINAL_META_REPORT.md"
 
-# --- [NEW] Rule: Validates biological identity for every pair ---
-rule check_biological_bridge:
+# --- [CORE VALIDATION] ---
+# This rule checks HGNC symbols across ALL cohorts simultaneously.
+# If coverage across the global intersection is < 20%, it will sys.exit(1).
+rule check_global_bridge:
     input:
-        a = lambda wildcards: config["data"][wildcards.c1]["mrna"],
-        b = lambda wildcards: config["data"][wildcards.c2]["mrna"]
+        mrnas = [config["data"][c]["mrna"] for c in COHORTS]
     output:
-        report = "results/validation/{c1}_vs_{c2}_bridge.txt"
+        report = "results/validation/global_bridge_report.txt"
     conda:
         "envs/environment.yaml"
     shell:
-        "python scripts/check_alignment.py {input.a} {input.b} > {output.report}"
+        "python scripts/check_alignment.py {input.mrnas} > {output.report}"
 
 rule run_snf:
     input:
-        # This forces the pipeline to validate EVERY bridge before starting math
-        bridges = expand("results/validation/{c1}_vs_{c2}_bridge.txt", 
-                         zip, 
-                         c1=[p[0] for p in COHORT_PAIRS], 
-                         c2=[p[1] for p in COHORT_PAIRS]),
-        layers = lambda wildcards: config["data"][wildcards.cohort].values()
+        # Forces the global validation to pass before fusion starts
+        bridge = "results/validation/global_bridge_report.txt",
+        # Explicitly collect only defined omics layers for the specific cohort
+        layers = lambda wildcards: [
+            config["data"][wildcards.cohort][layer] 
+            for layer in ["mrna", "methy", "mirna"] 
+            if layer in config["data"][wildcards.cohort]
+        ]
     output:
         fused = "results/{cohort}/fused_network.npy"
     log:
