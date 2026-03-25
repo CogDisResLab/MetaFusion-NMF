@@ -24,7 +24,15 @@ cd meta-snf-nmf
 # but you can preview the requirements in envs/environment.yaml
 ```
 ## Data Preparation
-Organize your data into cohort-specific subdirectories within the data/ folder. Ensure feature names (e.g., Gene Symbols) match across cohorts for horizontal integration.
+Organize your data into cohort-specific subdirectories within the data/ folder.
+
+**CRITICAL: This pipeline expects Wide Format (ML Layout).**
+
+Rows: Samples/Patients
+
+Columns: Features (Gene Symbols, CpG Sites, miRNA IDs)
+
+Feature names must be consistent across cohorts to enable Horizontal Integration.
 ```
 data/
 ├── Cohort_A/
