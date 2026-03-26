@@ -18,8 +18,9 @@ Ensure you have **Conda** or **Mamba** installed.
 
 ### 2. Clone and Setup
 ```bash
-git clone [https://github.com/your-username/meta-snf-nmf.git](https://github.com/your-username/meta-snf-nmf.git)
-cd meta-snf-nmf
+(Use repository as a template)
+git clone [https://github.com/your-username/your-repository-name.git](https://github.com/your-username/your-repository-name.git)
+cd your-repository-name
 # The pipeline manages its own environment via Snakemake
 # but you can preview the requirements in envs/environment.yaml
 ```
