@@ -2,38 +2,64 @@ import pandas as pd
 import numpy as np
 import os
 
-# Create data directory if it doesn't exist
-os.makedirs("data", exist_ok=True)
+# ---------------------------
+# Config
+# ---------------------------
+cohorts = ["cohort_a", "cohort_b"]
+n_samples = 50
 
-# 1. Create Patient IDs
-patients = [f"Patient_{i:03d}" for i in range(1, 51)]
-with open("data/patient_ids.txt", "w") as f:
-    f.write("\n".join(patients))
-
-# 2. Define HGNC Gene Pools for a "Real" Bridge
-# We use famous genes to ensure the API validator finds them
+# HGNC and miRNA pools
 m_genes = ["TP53", "EGFR", "MYC", "BRCA1", "BRCA2", "PTEN", "MTOR", "STAT3", "VEGFA", "GAPDH"]
-# Fill the rest with simulated HGNC-like names (GENE1, GENE2...)
+
 def generate_hgnc_list(prefix, count):
     return m_genes + [f"{prefix}{i}" for i in range(count - len(m_genes))]
 
-# 3. Define dimensions and Gene Symbols for each layer
 omics_config = {
-    "expression.csv": (50, generate_hgnc_list("MARK", 1000)),
-    "methylation.csv": (50, generate_hgnc_list("METH", 500)),
-    "mirna.csv": (50, [f"hsa-mir-{i}" for i in range(200)]) # miRNAs have their own HGNC format
+    "expression.tsv": 1000,
+    "methylation.tsv": 500,
+    "mirna.tsv": 200
 }
 
-# 4. Generate and save the CSVs
-for filename, (n_patients, feature_names) in omics_config.items():
-    # Generate random data
-    data = np.random.rand(n_patients, len(feature_names)) * 10
-    
-    # Create DataFrame with patients as rows and HGNC symbols as columns
-    df = pd.DataFrame(data, index=patients, columns=feature_names)
-    
-    # Note: If your pipeline expects genes as ROWS, use df.T.to_csv
-    df.to_csv(f"data/{filename}")
-    print(f"Created data/{filename} with {len(feature_names)} HGNC features.")
+# ---------------------------
+# Generate synthetic data with signal
+# ---------------------------
+for cohort_idx, cohort in enumerate(cohorts, start=1):
+    cohort_dir = f"data/{cohort}"
+    os.makedirs(cohort_dir, exist_ok=True)
 
-print("\nSuccess! Synthetic HGNC data is ready. The bridge check should now PASS.")
+    # Unique Sample IDs per cohort
+    patients = [f"{cohort.upper()}_Patient_{i:03d}" for i in range(1, n_samples+1)]
+    
+    for filename, n_features in omics_config.items():
+        if filename == "mirna.tsv":
+            features = [f"hsa-mir-{i}" for i in range(1, n_features+1)]
+        else:
+            features = generate_hgnc_list(f"{cohort.upper()}_GENE", n_features)
+        
+        # 1. Start with baseline noise
+        data = np.random.rand(n_features, n_samples) * 2 
+
+        # 2. Inject "Clusters" (Biological Signal)
+        # We split patients into two sub-groups (e.g., Subtype 1 and Subtype 2)
+        # Group 1 (first 25 patients): High expression in features 0-50
+        data[0:50, 0:25] += np.random.normal(loc=8, scale=1.5, size=(50, 25))
+        
+        # Group 2 (remaining 25 patients): High expression in features 50-100
+        data[50:100, 25:] += np.random.normal(loc=12, scale=2.0, size=(50, 25))
+
+        # 3. Add a Cohort-specific bias (so A looks different from B)
+        if cohort == "cohort_a":
+            data[100:150, :] += 5
+        else:
+            data[150:200, :] += 7
+
+        # Ensure no negative values (NMF requirement)
+        data = np.clip(data, 0, None)
+
+        df = pd.DataFrame(data, index=features, columns=patients)
+
+        # Save as TSV
+        df.to_csv(f"{cohort_dir}/{filename}", sep="\t")
+        print(f"Created {cohort_dir}/{filename} with signal ({df.shape[0]}x{df.shape[1]})")
+
+print("\n✅ Synthetic data with latent patterns ready! Your NMF dendrogram should now show clear branching.")

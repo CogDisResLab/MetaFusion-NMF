@@ -8,14 +8,14 @@ cohorts:
 # to allow for feature-wise meta-analysis later.
 data:
   Cohort_A:
-    mrna: "data/cohort_a/expression.csv"
-    methy: "data/cohort_a/methylation.csv"
-    mirna: "data/cohort_a/mirna.csv"
+    mrna: "data/cohort_a/expression.tsv"
+    methy: "data/cohort_a/methylation.tsv"
+    mirna: "data/cohort_a/mirna.tsv"
   
   Cohort_B:
-    mrna: "data/cohort_b/expression.csv"
-    methy: "data/cohort_b/methylation.csv"
-    mirna: "data/cohort_b/mirna.csv"
+    mrna: "data/cohort_b/expression.tsv"
+    methy: "data/cohort_b/methylation.tsv"
+    mirna: "data/cohort_b/mirna.tsv"
 
 # Global settings for the SNF/NMF pipeline
 params:

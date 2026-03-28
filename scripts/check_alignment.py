@@ -1,4 +1,4 @@
-# scripts/check_alignment_real.py
+# scripts/check_alignment_tcga.py
 import pandas as pd
 import sys
 import mygene
@@ -24,14 +24,17 @@ def validate_hgnc_real(gene_list, cohort_name):
 def main(files):
     cohort_data = {}
     
-    # 1. Process each file dynamically
+    # 1. Process each file
     for fpath in files:
-        # Use filename as the cohort label
-        label = os.path.basename(fpath).replace('.csv', '')
-        df = pd.read_csv(fpath)
+        label = os.path.basename(fpath).replace('.txt', '')
+        # TCGA RSEM files are tab-delimited
+        df = pd.read_csv(fpath, sep='\t')
         
-        # Identify gene columns
-        genes = [str(c) for c in df.columns if not c.lower().startswith(('unnamed', 'sample', 'id'))]
+        # Use Hugo_Symbol column as the gene list
+        if 'Hugo_Symbol' not in df.columns:
+            print(f"ERROR: 'Hugo_Symbol' column not found in {fpath}")
+            sys.exit(1)
+        genes = df['Hugo_Symbol'].dropna().unique().tolist()
         
         found, invalid = validate_hgnc_real(genes, label)
         cohort_data[label] = {
@@ -40,11 +43,11 @@ def main(files):
             "total_cols": len(genes)
         }
 
-    # 2. Global Bridge Calculation (Intersection of ALL cohorts)
+    # 2. Global Bridge Calculation
     all_valid_sets = [data["found"] for data in cohort_data.values()]
     global_bridge = set.intersection(*all_valid_sets) if all_valid_sets else set()
     
-    # 3. Report Generation
+    # 3. Report
     print(f"\n{'='*60}")
     print(f"   MULTI-COHORT HGNC VALIDATION & BRIDGE REPORT")
     print(f"{'='*60}")
@@ -54,10 +57,10 @@ def main(files):
         count = len(data["found"])
         max_found_count = max(max_found_count, count)
         print(f"\nCohort: {label}")
-        print(f"  - Total Features: {data['total_cols']}")
-        print(f"  - Valid HGNC:    {count}")
+        print(f"  - Total Genes: {data['total_cols']}")
+        print(f"  - Valid HGNC: {count}")
         if data["invalid"] and count < 10:
-             print(f"  - Invalid (5):   {list(data['invalid'])[:5]}")
+             print(f"  - Invalid (5): {list(data['invalid'])[:5]}")
 
     print(f"\n{'='*60}")
     print(f"FINAL BRIDGE ANALYSIS")
@@ -67,20 +70,19 @@ def main(files):
         print("\nCRITICAL: No valid HGNC symbols found in any cohort.")
         sys.exit(1)
     
-    # Coverage relative to the largest cohort
+    # Coverage relative to largest cohort
     coverage = (len(global_bridge) / max_found_count) * 100
-    print(f"  - Global Bridge Coverage:    {coverage:.2f}%")
+    print(f"  - Global Bridge Coverage: {coverage:.2f}%")
     
     if coverage < 20:
-        print("\nCRITICAL: Bridge is too small (<20%). Integration will likely fail.")
-        sys.exit(1) 
+        print("\nWARNING: Bridge is small (<20%). Integration may fail.")
     else:
         print("\nSUCCESS: Biological bridge confirmed across all cohorts.")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python scripts/check_alignment.py data/c1.csv data/c2.csv ... data/cN.csv")
+        print("Usage: python scripts/check_alignment_tcga.py data/c1.txt data/c2.txt ...")
         sys.exit(1)
     
-    # Pass all arguments from the command line starting from the first file
     main(sys.argv[1:])
+

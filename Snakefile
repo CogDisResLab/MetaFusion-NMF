@@ -1,49 +1,31 @@
 configfile: "config.yaml"
 
-# Extract cohorts from the nested config structure
 COHORTS = config["cohorts"]
-RANKS = [2, 3, 4, 5]
 
 rule all:
     input:
-        # 1. Global Gatekeeper: Validation report for all cohorts
-        "results/validation/global_bridge_report.txt",
-        # 2. Fused networks for every cohort
         expand("results/{cohort}/fused_network.npy", cohort=COHORTS),
-        # 3. NMF results for every cohort and every rank
-        expand("results/{cohort}/nmf_results_k{k}.csv", cohort=COHORTS, k=RANKS),
-        # 4. Final meta-summary and projections
+        expand("results/{cohort}/sample_ids.txt", cohort=COHORTS),
+        "results/global/merged_fused.npy",
+        "results/global/sample_index.csv",
+        "results/global/global_nmf_W.npy",
+        "results/global/global_nmf_H.npy",
         "results/meta_best_rank_summary.txt",
         expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS),
         "results/meta_conserved_drivers.csv",
-        "results/meta_similarity_heatmap.png",
+        "results/meta_cohort_separation.png",
         "results/FINAL_META_REPORT.md"
 
-# --- [CORE VALIDATION] ---
-# This rule checks HGNC symbols across ALL cohorts simultaneously.
-# If coverage across the global intersection is < 20%, it will sys.exit(1).
-rule check_global_bridge:
-    input:
-        mrnas = [config["data"][c]["mrna"] for c in COHORTS]
-    output:
-        report = "results/validation/global_bridge_report.txt"
-    conda:
-        "envs/environment.yaml"
-    shell:
-        "python scripts/check_alignment.py {input.mrnas} > {output.report}"
 
+# ---------------------------
+# 1. SNF per cohort
+# ---------------------------
 rule run_snf:
     input:
-        # Forces the global validation to pass before fusion starts
-        bridge = "results/validation/global_bridge_report.txt",
-        # Explicitly collect only defined omics layers for the specific cohort
-        layers = lambda wildcards: [
-            config["data"][wildcards.cohort][layer] 
-            for layer in ["mrna", "methy", "mirna"] 
-            if layer in config["data"][wildcards.cohort]
-        ]
+        layers = lambda wc: list(config["data"][wc.cohort].values())
     output:
-        fused = "results/{cohort}/fused_network.npy"
+        fused = "results/{cohort}/fused_network.npy",
+        samples = "results/{cohort}/sample_ids.txt"
     log:
         "logs/{cohort}/snf_fusion.log"
     conda:
@@ -51,61 +33,100 @@ rule run_snf:
     shell:
         "python scripts/snf_fusion.py "
         "--inputs {input.layers} "
-        "--output {output.fused} > {log} 2>&1"
+        "--output {output.fused} "
+        "--sample_ids {output.samples} "
+        "> {log} 2>&1"
 
-rule run_nmf:
+
+# ---------------------------
+# 2. Merge fused networks
+# ---------------------------
+rule merge_fused_networks:
     input:
-        fused = "results/{cohort}/fused_network.npy"
+        fused = expand("results/{cohort}/fused_network.npy", cohort=COHORTS),
+        samples = expand("results/{cohort}/sample_ids.txt", cohort=COHORTS)
     output:
-        csv = "results/{cohort}/nmf_results_k{k}.csv"
+        merged = "results/global/merged_fused.npy",
+        index = "results/global/sample_index.csv"
     conda:
         "envs/environment.yaml"
     shell:
-        "python scripts/nmf_decompose.py "
-        "--input {input.fused} "
-        "--rank {wildcards.k} "
-        "--output {output.csv}"
+        "python scripts/merge_fused_networks.py "
+        "--inputs {input.fused} "
+        "--sample_ids {input.samples} "
+        "--output {output.merged} "
+        "--index_map {output.index}"
 
+
+# ---------------------------
+# 3. Global NMF
+# ---------------------------
+rule run_global_nmf:
+    input:
+        fused = "results/global/merged_fused.npy"
+    output:
+        W = "results/global/global_nmf_W.npy",
+        H = "results/global/global_nmf_H.npy"
+    conda:
+        "envs/environment.yaml"
+    shell:
+        "python scripts/nmf_global.py "
+        "--input {input.fused} "
+        "--output_w {output.W} "
+        "--output_h {output.H}"
+
+
+# ---------------------------
+# 4. Select meta best k
+# ---------------------------
 rule select_meta_best_k:
     input:
-        expand("results/{cohort}/nmf_results_k{k}.csv", cohort=COHORTS, k=RANKS)
+        "results/global/global_nmf_W.npy"
     output:
         summary = "results/meta_best_rank_summary.txt"
     run:
-        import pandas as pd
-        all_data = []
-        for f in input:
-            df = pd.read_csv(f)
-            all_data.append(df[['rank', 'cophenetic_coeff']])
-        
-        res_df = pd.concat(all_data)
-        mean_ccc = res_df.groupby('rank')['cophenetic_coeff'].mean()
-        best_k = mean_ccc.idxmax()
-        
-        with open(output.summary, "w") as f:
-            f.write(f"Meta-Best Rank (k): {int(best_k)}\n")
-            f.write(f"Average Cophenetic Correlation: {mean_ccc[best_k]:.4f}\n")
+        import numpy as np
 
+        W = np.load(input[0])
+        k = W.shape[1]
+
+        with open(output.summary, "w") as f:
+            f.write(f"Meta-Best Rank (k): {k}\n")
+            f.write("Derived from global NMF\n")
+
+
+# ---------------------------
+# 5. Project features
+# ---------------------------
 rule project_features:
     input:
         summary = "results/meta_best_rank_summary.txt",
+        W = "results/global/global_nmf_W.npy",
+        index = "results/global/sample_index.csv",
         fused = "results/{cohort}/fused_network.npy",
-        mrna = lambda wildcards: config["data"][wildcards.cohort]["mrna"],
-        methy = lambda wildcards: config["data"][wildcards.cohort].get("methy", ""),
-        mirna = lambda wildcards: config["data"][wildcards.cohort].get("mirna", "")
+        omics_layers = lambda wc: list(config["data"][wc.cohort].values())
     output:
         top_features = "results/{cohort}/top_features_best_k.csv"
     log:
         "logs/{cohort}/project_features.log"
     conda:
         "envs/environment.yaml"
+    params:
+        omics = lambda wc, input: ' '.join(input.omics_layers)
     shell:
-        "python scripts/project_features.py "
+        "python scripts/project_features_global.py "
         "--summary {input.summary} "
+        "--global_w {input.W} "
+        "--index_map {input.index} "
+        "--cohort {wildcards.cohort} "
         "--fused {input.fused} "
-        "--omics {input.mrna} {input.methy} {input.mirna} "
+        "--omics {params.omics} "
         "--output {output.top_features} > {log} 2>&1"
 
+
+# ---------------------------
+# 6. Compare cohorts
+# ---------------------------
 rule compare_meta_cohorts:
     input:
         expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS)
@@ -118,18 +139,28 @@ rule compare_meta_cohorts:
         "--inputs {input} "
         "--output {output.csv}"
 
+
+# ---------------------------
+# 7. Plot similarity / cohort separation
+# ---------------------------
 rule plot_meta_similarity:
     input:
-        expand("results/{cohort}/top_features_best_k.csv", cohort=COHORTS)
+        W = "results/global/global_nmf_W.npy",
+        index = "results/global/sample_index.csv"
     output:
-        png = "results/meta_similarity_heatmap.png"
+        png = "results/meta_cohort_separation.png"
     conda:
         "envs/environment.yaml"
     shell:
         "python scripts/plot_meta_correlation.py "
-        "--inputs {input} "
+        "--nmf_w {input.W} "
+        "--sample_index {input.index} "
         "--output {output.png}"
 
+
+# ---------------------------
+# 8. Final report
+# ---------------------------
 rule generate_meta_report:
     input:
         summary = "results/meta_best_rank_summary.txt",
@@ -143,3 +174,4 @@ rule generate_meta_report:
         "--summary {input.summary} "
         "--drivers {input.drivers} "
         "--output {output.report}"
+

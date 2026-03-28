@@ -3,56 +3,75 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Patch
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--inputs', nargs='+', required=True, help='List of top_features_best_k.csv files')
-    parser.add_argument('--output', required=True, help='Path to save heatmap (e.g., results/meta_heatmap.png)')
+    parser.add_argument('--nmf_w', required=True, help='Path to global NMF W matrix (.npy)')
+    parser.add_argument('--sample_index', required=True, help='CSV mapping samples to cohort')
+    parser.add_argument('--output', required=True, help='Path to save clustered heatmap')
     args = parser.parse_args()
 
-    # Load data and pivot to create "Signatures"
-    cohort_data = {}
-    for f in args.inputs:
-        cohort_name = f.split('/')[-2]
-        df = pd.read_csv(f)
-        # Create a matrix of [Features x Clusters] for this cohort
-        pivot_df = df.pivot_table(index='feature', columns='cluster', values='correlation').fillna(0)
-        cohort_data[cohort_name] = pivot_df
+    # 1. Load data
+    W = np.load(args.nmf_w)  # shape: (n_samples, n_clusters)
+    sample_index = pd.read_csv(args.sample_index, index_col=0)
 
-    cohort_names = list(cohort_data.keys())
-    if len(cohort_names) < 2:
-        print("Error: Need at least 2 cohorts to compare.")
-        return
+    if 'cohort' not in sample_index.columns:
+        raise ValueError("Sample index CSV must contain a 'cohort' column")
 
-    # Find common features across both cohorts to compare apples to apples
-    c1, c2 = cohort_names[0], cohort_names[1]
-    common_features = cohort_data[c1].index.intersection(cohort_data[c2].index)
+    if len(sample_index) != W.shape[0]:
+        raise ValueError(f"W shape {W.shape[0]} doesn't match index length {len(sample_index)}")
+
+    # 2. Create DataFrame directly using the original index to ensure alignment
+    W_df = pd.DataFrame(
+        W,
+        index=sample_index.index,
+        columns=[f"Cluster_{i+1}" for i in range(W.shape[1])]
+    )
+
+    # 3. Map Colors to the index
+    # We create the color series based on the same index as W_df
+    unique_cohorts = sample_index['cohort'].unique()
+    palette = sns.color_palette("Set2", n_colors=len(unique_cohorts))
+    cohort_colors_map = {c: palette[i] for i, c in enumerate(unique_cohorts)}
     
-    if len(common_features) == 0:
-        print("Error: No common features found between cohorts. Check gene naming (Human vs Mouse?)")
-        return
+    # This series is indexed identically to W_df
+    row_colors = sample_index['cohort'].map(cohort_colors_map)
 
-    # Calculate Correlation between Cluster Signatures
-    sig1 = cohort_data[c1].loc[common_features]
-    sig2 = cohort_data[c2].loc[common_features]
-    
-    # Correlation matrix between columns of sig1 and sig2
-    corr_matrix = sig1.corrwith(sig2, axis=0, drop=True) # Simple approach
-    # More robust: Pearson correlation between every cluster pair
-    final_corr = pd.DataFrame(index=sig1.columns, columns=sig2.columns)
-    for col1 in sig1.columns:
-        for col2 in sig2.columns:
-            final_corr.loc[col1, col2] = sig1[col1].corr(sig2[col2])
+    # 4. Plot clustered heatmap
+    # row_cluster=True will mathematically group samples. 
+    # Seaborn will automatically reorder 'row_colors' to stay aligned with the rows.
+    g = sns.clustermap(
+        W_df,
+        row_cluster=True,
+        col_cluster=True,
+        row_colors=row_colors,
+        cmap="viridis",
+        figsize=(12, 10),
+        linewidths=0, # Thinner lines often look cleaner with many samples
+        method='average',
+        metric='euclidean',
+        # z_score=0  # Uncomment this to normalize clusters across rows
+    )
 
-    # Plotting
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(final_corr.astype(float), annot=True, cmap='RdBu_r', center=0)
-    plt.title(f'Cluster Similarity: {c1} (Rows) vs {c2} (Cols)')
-    plt.xlabel(f'{c2} Clusters')
-    plt.ylabel(f'{c1} Clusters')
-    plt.tight_layout()
-    plt.savefig(args.output)
-    print(f"Heatmap saved to {args.output}")
+    # 5. Clean up labels
+    plt.setp(g.ax_heatmap.get_xticklabels(), rotation=90)
+    plt.setp(g.ax_heatmap.get_yticklabels(), rotation=0, fontsize=8)
+
+    # 6. Legend for cohorts
+    handles = [Patch(facecolor=cohort_colors_map[c], edgecolor='k', label=c) for c in unique_cohorts]
+    g.ax_heatmap.legend(
+        handles=handles,
+        title="Cohort",
+        bbox_to_anchor=(1.2, 1),
+        loc='upper left'
+    )
+
+    g.fig.suptitle("Global NMF: Samples × Clusters (Clustered)", y=1.02)
+
+    # Save
+    g.savefig(args.output, bbox_inches='tight')
+    print(f"Clustered heatmap saved to {args.output}")
 
 if __name__ == "__main__":
     main()
